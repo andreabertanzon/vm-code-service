@@ -2,11 +2,14 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/spf13/viper"
 )
 
@@ -24,8 +27,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	_ = prepareAwsConfig()
 
 	//TODO: instead of hardcoding the file, just find another option
 	http.HandleFunc("/", handleVMFileRequest)
@@ -57,14 +58,52 @@ func handleVMFileRequest(w http.ResponseWriter, r *http.Request) {
 	// handle the files by query parameter like file=
 	w.WriteHeader(200)
 	w.Header().Add("Content-Type", "text/plain")
-	fmt.Fprintf(w, "Hello, World")
+	s3Config := prepareAwsConfig()
+
+	queryParams := r.URL.Query()
+	fileName := queryParams.Get("file")
+
+	if fileName == "" {
+		w.WriteHeader(400)
+		fmt.Fprint(w, "You must specify a file to query for, ?file=pippo.txt")
+		return
+	}
+
+	newSession, err := session.NewSession(s3Config)
+	if err != nil {
+		w.WriteHeader(500)
+		fmt.Fprintf(w, "Error creating sesstion: %e", err)
+	}
+
+	s3Client := s3.New(newSession)
+
+	result, err := s3Client.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String("vm-files"),
+		Key:    aws.String(fileName),
+	})
+	if err != nil {
+		fmt.Fprintf(w, "Failed getting obj from minio: %s", fileName)
+		return
+	}
+	defer result.Body.Close()
+
+	// Set the proper content type and other headers here.
+	w.Header().Set("Content-Type", "text/plain")
+
+	// Serve the file
+	io.Copy(w, result.Body)
+
 }
 
 // initializes viper to read from configuration files
 func prepareConfig() error {
-	viper.SetConfigName(".env")
+	viper.SetConfigName("env")
 	viper.AddConfigPath(".")
 	viper.AutomaticEnv()
+
+	if err := viper.ReadInConfig(); err != nil {
+		log.Fatalf("Error reading config file, %s", err)
+	}
 
 	// Access the variables using viper directly
 	accessKeyId = viper.GetString("ACCESS_KEY_ID")
