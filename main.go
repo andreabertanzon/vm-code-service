@@ -56,7 +56,6 @@ func prepareAwsConfig() *aws.Config {
 
 func handleVMFileRequest(w http.ResponseWriter, r *http.Request) {
 	// handle the files by query parameter like file=
-	w.WriteHeader(200)
 	s3Config := prepareAwsConfig()
 
 	queryParams := r.URL.Query()
@@ -69,6 +68,8 @@ func handleVMFileRequest(w http.ResponseWriter, r *http.Request) {
 
 	download := queryParams.Get("download")
 	if download == "true" {
+		fmt.Println("filename:", fileName)
+		fmt.Println("filename:", download)
 		w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
 		w.Header().Set("Content-Type", "application/octet-stream")
 	} else {
