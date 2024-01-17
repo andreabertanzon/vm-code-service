@@ -57,22 +57,27 @@ func prepareAwsConfig() *aws.Config {
 func handleVMFileRequest(w http.ResponseWriter, r *http.Request) {
 	// handle the files by query parameter like file=
 	w.WriteHeader(200)
-	w.Header().Add("Content-Type", "text/plain")
 	s3Config := prepareAwsConfig()
 
 	queryParams := r.URL.Query()
 	fileName := queryParams.Get("file")
-
 	if fileName == "" {
 		w.WriteHeader(400)
 		fmt.Fprint(w, "You must specify a file to query for, ?file=pippo.txt")
 		return
 	}
 
+	download := queryParams.Get("download")
+	if download == "true" {
+		w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
+		w.Header().Set("Content-Type", "application/octet-stream")
+	} else {
+		w.Header().Add("Content-Type", "text/plain")
+	}
+
 	newSession, err := session.NewSession(s3Config)
 	if err != nil {
-		w.WriteHeader(500)
-		fmt.Fprintf(w, "Error creating sesstion: %e", err)
+		http.Error(w, "Error establishing S3 connection", http.StatusInternalServerError)
 	}
 
 	s3Client := s3.New(newSession)
@@ -82,16 +87,16 @@ func handleVMFileRequest(w http.ResponseWriter, r *http.Request) {
 		Key:    aws.String(fileName),
 	})
 	if err != nil {
-		fmt.Fprintf(w, "Failed getting obj from minio: %s", fileName)
+		http.Error(w, "Error connecting to S3 bucket", http.StatusInternalServerError)
 		return
 	}
 	defer result.Body.Close()
 
-	// Set the proper content type and other headers here.
-	w.Header().Set("Content-Type", "text/plain")
-
 	// Serve the file
-	io.Copy(w, result.Body)
+	_, err = io.Copy(w, result.Body)
+	if err != nil {
+		http.Error(w, "Error sending file.", http.StatusInternalServerError)
+	}
 
 }
 
