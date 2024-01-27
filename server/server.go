@@ -26,10 +26,13 @@ func defaultServerConfig() ServerConfig {
 
 type Server struct {
 	config ServerConfig
+	services.S3Service
 }
 
-func NewServer(c ...ServerConfigFunc) *Server {
-	s := &Server{}
+func NewServer(tfHandler services.S3Service, c ...ServerConfigFunc) *Server {
+	s := &Server{
+		S3Service: tfHandler,
+	}
 	conf := defaultServerConfig()
 	for _, configFn := range c {
 		configFn(&conf)
@@ -47,10 +50,11 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) registerRoutes() {
-	http.HandleFunc("/terraform-state", handleTerraformState)
+	http.HandleFunc("/terraform-state", s.handleTerraformState)
+	http.HandleFunc("/template-content", s.handleDowloadZipFolder)
 }
 
-func handleTerraformState(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleTerraformState(w http.ResponseWriter, r *http.Request) {
 	// handle the files by query parameter like file=
 
 	minioService, err := services.NewMinioService()
@@ -68,4 +72,27 @@ func handleTerraformState(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 	w.Header().Add("Content-Disposition", "attachment; filename="+"terraform.tfstate")
 	w.Write(outobj)
+}
+
+func (s *Server) handleDowloadZipFolder(w http.ResponseWriter, r *http.Request) {
+	// only handle GET requests
+	if r.Method != http.MethodGet {
+		w.WriteHeader(405)
+		fmt.Fprint(w, "Method not allowed")
+		return
+	}
+
+	folderQueryParameter := r.URL.Query().Get("folder")
+
+	content, err := s.S3Service.DowloadBucketFolderToZip("vm-templates", folderQueryParameter)
+
+	if err != nil {
+		w.WriteHeader(500)
+		fmt.Fprint(w, "Error getting terraform state")
+		return
+	}
+
+	w.WriteHeader(200)
+	w.Header().Add("Content-Disposition", "attachment; filename="+folderQueryParameter+".zip")
+	w.Write(content)
 }

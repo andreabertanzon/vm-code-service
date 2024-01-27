@@ -12,9 +12,12 @@
 package services
 
 import (
+	"archive/zip"
+	"bytes"
 	"fmt"
 	"io"
 	"log"
+	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -23,6 +26,7 @@ import (
 	"github.com/spf13/viper"
 )
 
+// Holds configuration values for MinIO
 type MinioConfig struct {
 	Endpoint        string
 	AccessKeyID     string
@@ -31,6 +35,7 @@ type MinioConfig struct {
 	DisableSSL      bool
 }
 
+// This service is responsible for handling connection to MinIO buckets
 type MinioService struct {
 	config   MinioConfig
 	s3Config *aws.Config
@@ -58,7 +63,7 @@ func (m *MinioService) GetTerraformState() ([]byte, error) {
 	s3Client := s3.New(newSession)
 
 	result, err := s3Client.GetObject(&s3.GetObjectInput{
-		Bucket: aws.String("vm-files"),
+		Bucket: aws.String("tf-state"),
 		Key:    aws.String("terraform.tfstate"),
 	})
 	if err != nil {
@@ -66,6 +71,70 @@ func (m *MinioService) GetTerraformState() ([]byte, error) {
 	}
 	defer result.Body.Close()
 	return io.ReadAll(result.Body)
+}
+
+func (m *MinioService) PutTerraformState(content []byte) error {
+	newSession, err := session.NewSession(m.s3Config)
+	if err != nil {
+		return err
+	}
+	s3Client := s3.New(newSession)
+	_, err = s3Client.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String("tf-state"),
+		Key:    aws.String("terraform.tfstate"),
+		Body:   bytes.NewReader(content),
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *MinioService) DowloadBucketFolderToZip(bucketName string, folder string) ([]byte, error) {
+	newSession, err := session.NewSession(m.s3Config)
+	if err != nil {
+		return nil, err
+	}
+
+	s3Client := s3.New(newSession)
+	// List all the objects inside
+	resp, err := s3Client.ListObjectsV2(&s3.ListObjectsV2Input{
+		Bucket: aws.String(bucketName),
+		Prefix: aws.String(folder)})
+	if err != nil {
+		return nil, err
+	}
+
+	// Using a buffer to write the zip to
+	buf := new(bytes.Buffer)
+
+	w := zip.NewWriter(buf)
+
+	for _, item := range resp.Contents {
+		object, err := s3Client.GetObject(&s3.GetObjectInput{
+			Bucket: aws.String(bucketName),
+			Key:    item.Key,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		file, err := w.Create(strings.TrimPrefix(*item.Key, folder))
+		if err != nil {
+			return nil, err
+		}
+
+		if _, err = io.Copy(file, object.Body); err != nil {
+			return nil, err
+		}
+		object.Body.Close()
+	}
+
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
 }
 
 // initializes viper to read from configuration files
